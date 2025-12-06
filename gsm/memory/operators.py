@@ -4,9 +4,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from .core import NodeId, NodeType, OperatorKind, MemoryGraph
-from .patterns import ConceptPattern
-
+from gsm.memory.core import NodeId, NodeType, OperatorKind, MemoryGraph
+from gsm.memory.patterns import ConceptPattern
 
 @dataclass
 class OperatorStats:
@@ -17,26 +16,54 @@ class OperatorStats:
     node. You can also copy some of them into MemoryGraph.node_stats
     if you want retrieval to use them without pulling the Operator object.
     """
+    # lifecycle
     created_at: int = 0
     last_used_at: int = 0
+
+    # usage
     use_count: int = 0
     success_count: int = 0
+    failure_count: int = 0
+
+    # value
     avg_reward: float = 0.0
+
+    # immune-ish
+    strength: float = 1.0     # clonal level
+
+    @property
+    def precision(self) -> float:
+        if self.use_count == 0:
+            return 0.0
+        return self.success_count / self.use_count
+
+    def to_stats_dict(self) -> Dict[str, Any]:
+        return {
+            "created_at": self.created_at,
+            "last_used_at": self.last_used_at,
+            "use_count": self.use_count,
+            "success_count": self.success_count,
+            "failure_count": self.failure_count,
+            "avg_reward": self.avg_reward,
+            "strength": self.strength,
+            "precision": self.precision,
+        }
 
     def update_success(self, reward: float, now: int) -> None:
         self.use_count += 1
         self.success_count += 1
         self.last_used_at = now
-        # incremental running average
-        alpha = 1.0 / self.use_count
-        self.avg_reward = (1.0 - alpha) * self.avg_reward + alpha * reward
+        alpha = 0.1
+        self.avg_reward = (1 - alpha) * self.avg_reward + alpha * reward
+        self.strength *= 1.05   # clonal expansion
 
     def update_failure(self, now: int) -> None:
         self.use_count += 1
+        self.failure_count += 1
         self.last_used_at = now
+        self.strength *= 0.95   # negative selection
 
 
-@dataclass
 class Operator:
     """
     Concept-level operator living in the MemoryGraph.
@@ -56,6 +83,7 @@ class Operator:
       - kind = DYNAMICS / POLICY
       - associated_actions may list ACTION / OPTION node ids.
     """
+
     id: str
     name: str
     kind: OperatorKind
@@ -140,6 +168,15 @@ class Operator:
         """
         raise NotImplementedError("Operator.apply_to_concept_graph is not implemented yet")
 
+    def record_success(self, mem: MemoryGraph, node_id: NodeId, reward: float, now: int) -> None:
+        self.stats.update_success(reward=reward, now=now)
+        mem.update_stats(node_id, self.stats.to_stats_dict())
+
+    def record_failure(self, mem: MemoryGraph, node_id: NodeId, now: int) -> None:
+        self.stats.update_failure(now=now)
+        mem.update_stats(node_id, self.stats.to_stats_dict())
+
+
 def add_operator_node(
     mem: MemoryGraph,
     operator: Operator,
@@ -172,13 +209,6 @@ def add_operator_node(
     )
 
     # Mirror stats into node stats
-    s = operator.stats
-    mem.update_stats(node_id, {
-        "created_at": s.created_at,
-        "last_used_at": s.last_used_at,
-        "use_count": s.use_count,
-        "success_count": s.success_count,
-        "avg_reward": s.avg_reward,
-    })
+    mem.update_stats(node_id, operator.stats.to_stats_dict())
 
     return node_id

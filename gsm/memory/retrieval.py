@@ -199,6 +199,7 @@ class RetrievalEngine:
             return activation
         return {n: a / max_val for n, a in activation.items()}
 
+
     def _select_operators(
         self,
         cue: Cue,
@@ -211,6 +212,7 @@ class RetrievalEngine:
 
         Ranking heuristic:
           - base activation of the operator node
+          - modulated by immune stats (strength, precision, active)
           - plus operator.score_applicability(cue, graph)
 
         Filtering by goal:
@@ -225,6 +227,12 @@ class RetrievalEngine:
 
         ops: List[Operator] = []
         for n in operator_nodes:
+            # --- NEW: pull stats + active flag from MemoryGraph ---
+            stats = self.graph.node_stats(n)
+            if not stats.get("active", True):
+                # immune system has soft-pruned this operator
+                continue
+
             op_obj = self.graph.get_attr(n, "operator_obj")
             if op_obj is None:
                 continue
@@ -234,7 +242,18 @@ class RetrievalEngine:
 
             base_act = activation.get(n, 0.0)
             applicability = op_obj.score_applicability(cue, self.graph)
-            score = base_act + applicability
+
+            # --- NEW: immune modulation from stats ---
+            strength = stats.get("strength", 1.0)
+            precision = stats.get("precision", 0.0)
+            immune_boost = (1.0 + strength) * (0.5 + precision)
+
+            # total score combines:
+            #   - spreading activation (context)
+            #   - immune health (strength/precision)
+            #   - local applicability
+            score = base_act * immune_boost + applicability
+
             op_obj.last_applicability_score = score
             ops.append(op_obj)
 
@@ -249,6 +268,7 @@ class RetrievalEngine:
 
         ops.sort(key=lambda op: op.last_applicability_score, reverse=True)
         return ops[:k]
+
 
     def _select_actions(
         self,

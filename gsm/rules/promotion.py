@@ -193,7 +193,6 @@ def find_operator_by_signature(
 
 # --------- Promotion / merge core ---------
 
-
 def promote_rule_to_memory(
     mem: MemoryGraph,
     *,
@@ -280,13 +279,21 @@ def promote_rule_to_memory(
     success_count = len(event_nodes_solved)
     use_count = success_count
 
+    # --- CHANGED: construct OperatorStats in the new merged / immune-aware form ---
+    # We treat each solved event as a success, with:
+    # - created_at / last_used_at = now
+    # - avg_reward = reward
+    # - strength boosted as if we had success_count successes
     stats = OperatorStats(
         created_at=now,
         last_used_at=now,
         use_count=use_count,
         success_count=success_count,
+        failure_count=0,
         avg_reward=reward,
+        strength=(1.05 ** success_count),  # same clonal factor used in merge
     )
+    # (precision is derived from use_count/success_count via the property)
 
     input_pattern = ConceptPattern()
 
@@ -327,7 +334,6 @@ def promote_rule_to_memory(
 
     return op_node_id
 
-
 def _merge_rule_into_existing_operator(
     mem: MemoryGraph,
     *,
@@ -340,6 +346,11 @@ def _merge_rule_into_existing_operator(
     """
     Update stats and edges when a new task's RuleProgram matches an
     existing operator's signature.
+
+    Immune-style interpretation:
+      - each solved event is another successful 'use'
+      - strength (clonal level) is boosted accordingly
+      - precision is kept consistent via OperatorStats.precision
     """
     # Fetch the existing Operator object
     op_obj = mem.get_attr(op_node_id, "operator_obj")
@@ -349,27 +360,30 @@ def _merge_rule_into_existing_operator(
 
     # Update stats: treat each solved event as another successful 'use'
     additional_uses = len(event_nodes_solved)
-    s = op_obj.stats
+    if additional_uses == 0:
+        # nothing to update, just wire edges
+        pass
+    else:
+        s = op_obj.stats
 
-    old_use = s.use_count
-    old_avg = s.avg_reward
+        old_use = s.use_count
+        old_avg = s.avg_reward
 
-    s.use_count += additional_uses
-    s.success_count += additional_uses
-    s.last_used_at = now
+        s.use_count += additional_uses
+        s.success_count += additional_uses
+        s.last_used_at = now
 
-    # Update avg_reward as a weighted average
-    if s.use_count > 0:
-        total_reward = old_avg * old_use + reward * additional_uses
-        s.avg_reward = total_reward / s.use_count
+        # Update avg_reward as a weighted average (preserve your existing logic)
+        if s.use_count > 0:
+            total_reward = old_avg * old_use + reward * additional_uses
+            s.avg_reward = total_reward / s.use_count
 
-    # Mirror updated stats into MemoryGraph node stats
-    mem.update_stats(op_node_id, {
-        "last_used_at": s.last_used_at,
-        "use_count": s.use_count,
-        "success_count": s.success_count,
-        "avg_reward": s.avg_reward,
-    })
+        # NEW: clonal expansion – boost strength per successful use
+        # (you can tweak 1.05 if you want slower/faster growth)
+        s.strength *= 1.05 ** additional_uses
+
+        # Mirror *all* stats, including precision/strength, into MemoryGraph
+        mem.update_stats(op_node_id, s.to_stats_dict())
 
     # Wire context -> operator (if new)
     if context_node is not None:
@@ -388,4 +402,3 @@ def _merge_rule_into_existing_operator(
             type_=EdgeType.LEADS_TO,
             attrs={"source": "promotion_merge"},
         )
-
