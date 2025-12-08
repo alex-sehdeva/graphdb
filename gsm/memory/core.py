@@ -51,6 +51,16 @@ class EdgeType(Enum):
     LEADS_TO = auto()
     YIELDS = auto()
     REFINES = auto()
+    SPATIAL_RELATION = auto()
+    """
+    Generic spatial relation between entities.
+
+    The specific relation is stored in edge attrs["relation"], e.g.:
+      - "above"
+      - "below"
+      - "left_of"
+      - "right_of"
+    """
 
 
 class OperatorKind(Enum):
